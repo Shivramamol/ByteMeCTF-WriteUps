@@ -174,7 +174,7 @@ The challenge uses a custom symmetric stream cipher. Analyzing the forward encry
 2. Left bitwise rotation by $r = (k + \text{chain}[i] + i) \pmod 8$:  
    $x_2 = \text{ROL}_8(x_1, r)$
 3. 4-bit nibble swap:  
-   $x_3 = \text{SWAP\_NIBBLES}(x_2)$
+   $x_3 = \text{SwapNibbles}(x_2)$
 4. Final position-dependent XOR:  
    $\text{ciphertext}[i] = x_3 \oplus (((i \times 31) + \text{chain}[i]) \ \& \ \text{0xFF})$
 
@@ -183,7 +183,7 @@ To decrypt, we invert each operation in reverse order:
 1. Invert position XOR:  
    $x_3 = c[i] \oplus (((i \times 31) + \text{chain}[i]) \ \& \ \text{0xFF})$
 2. Invert nibble swap:  
-   $x_2 = \text{SWAP\_NIBBLES}(x_3)$
+   $x_2 = \text{SwapNibbles}(x_3)$
 3. Right bitwise rotation:  
    $x_1 = \text{ROR}_8(x_2, (k + \text{chain}[i] + i) \pmod 8)$
 4. Invert key & chain XOR:  

