@@ -212,7 +212,7 @@ Copy the exact flag returned by the deployed challenge.
 
 ```text
 
-OWASP{REPLACE\_WITH\_ACTUAL\_FLAG}
+OWASP{soul\_registry\_test\_flag}
 
 ```
 
