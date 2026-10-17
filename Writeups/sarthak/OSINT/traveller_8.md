@@ -52,4 +52,4 @@ Combining the name and position in the required `OWASP{NAME_POSITION}` format:
 ```
 OWASP{SARTHAK_CO_LEAD}
 ```
-*(Alternate position-only format: `OWASP{CO_LEAD}`)*
+
